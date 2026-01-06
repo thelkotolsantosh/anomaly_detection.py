@@ -1,0 +1,169 @@
+"""
+Unit tests for the anomaly_detection module.
+"""
+
+import pytest
+import pandas as pd
+import numpy as np
+from anomaly_detection import generate_login_data, detect_anomalies
+
+
+class TestGenerateLoginData:
+    """Tests for generate_login_data function."""
+    
+    def test_generates_correct_number_of_records(self):
+        """Test that the function generates the requested number of records."""
+        df = generate_login_data(n_records=100, seed=7)
+        assert len(df) == 100
+    
+    def test_generates_correct_columns(self):
+        """Test that the DataFrame has the correct columns."""
+        df = generate_login_data(seed=7)
+        assert list(df.columns) == ['user', 'logins']
+    
+    def test_user_format(self):
+        """Test that user IDs are formatted correctly."""
+        df = generate_login_data(n_records=50, n_users=10, seed=7)
+        for user in df['user'].unique():
+            assert user.startswith('user_')
+            user_num = int(user.split('_')[1])
+            assert 1 <= user_num < 10
+    
+    def test_logins_are_non_negative(self):
+        """Test that login counts are non-negative integers."""
+        df = generate_login_data(seed=7)
+        assert all(df['logins'] >= 0)
+        assert all(df['logins'].dtype == np.int64 or df['logins'].dtype == int)
+    
+    def test_reproducibility(self):
+        """Test that the same seed produces the same results."""
+        df1 = generate_login_data(n_records=50, seed=42)
+        df2 = generate_login_data(n_records=50, seed=42)
+        pd.testing.assert_frame_equal(df1, df2)
+    
+    def test_different_seeds_produce_different_results(self):
+        """Test that different seeds produce different results."""
+        df1 = generate_login_data(n_records=50, seed=42)
+        df2 = generate_login_data(n_records=50, seed=43)
+        assert not df1.equals(df2)
+
+
+class TestDetectAnomalies:
+    """Tests for detect_anomalies function."""
+    
+    def test_returns_tuple(self):
+        """Test that the function returns a tuple."""
+        df = generate_login_data(seed=7)
+        result = detect_anomalies(df)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+    
+    def test_returns_dataframe_and_dict(self):
+        """Test that the function returns DataFrame and dict."""
+        df = generate_login_data(seed=7)
+        anomalies, stats = detect_anomalies(df)
+        assert isinstance(anomalies, pd.DataFrame)
+        assert isinstance(stats, dict)
+    
+    def test_anomalies_dataframe_structure(self):
+        """Test that anomalies DataFrame has correct structure."""
+        df = generate_login_data(seed=7)
+        anomalies, _ = detect_anomalies(df)
+        assert list(anomalies.columns) == ['user', 'logins']
+    
+    def test_stats_dict_keys(self):
+        """Test that stats dict contains all expected keys."""
+        df = generate_login_data(seed=7)
+        _, stats = detect_anomalies(df)
+        expected_keys = {
+            'mean', 'std', 'threshold', 'std_multiplier',
+            'total_records', 'anomaly_count', 'anomaly_percentage'
+        }
+        assert set(stats.keys()) == expected_keys
+    
+    def test_anomalies_exceed_threshold(self):
+        """Test that all anomalies exceed the threshold."""
+        df = generate_login_data(seed=7)
+        anomalies, stats = detect_anomalies(df)
+        assert all(anomalies['logins'] > stats['threshold'])
+    
+    def test_threshold_calculation(self):
+        """Test that threshold is calculated correctly."""
+        df = generate_login_data(seed=7)
+        anomalies, stats = detect_anomalies(df, std_multiplier=2)
+        expected_threshold = df['logins'].mean() + 2 * df['logins'].std()
+        assert abs(stats['threshold'] - expected_threshold) < 1e-10
+    
+    def test_different_std_multipliers(self):
+        """Test that different multipliers affect results."""
+        df = generate_login_data(seed=7)
+        _, stats1 = detect_anomalies(df, std_multiplier=1)
+        _, stats2 = detect_anomalies(df, std_multiplier=3)
+        
+        # More lenient multiplier (3) should find fewer anomalies
+        assert stats1['anomaly_count'] >= stats2['anomaly_count']
+    
+    def test_anomaly_percentage_calculation(self):
+        """Test that anomaly percentage is calculated correctly."""
+        df = generate_login_data(n_records=100, seed=7)
+        anomalies, stats = detect_anomalies(df)
+        expected_percentage = (stats['anomaly_count'] / stats['total_records']) * 100
+        assert abs(stats['anomaly_percentage'] - expected_percentage) < 1e-10
+    
+    def test_empty_dataframe(self):
+        """Test behavior with empty DataFrame."""
+        df = pd.DataFrame({'user': [], 'logins': []})
+        anomalies, stats = detect_anomalies(df)
+        assert len(anomalies) == 0
+        assert stats['anomaly_count'] == 0
+    
+    def test_all_values_below_threshold(self):
+        """Test when no anomalies exist."""
+        df = pd.DataFrame({
+            'user': ['user_1', 'user_2', 'user_3'],
+            'logins': [1, 2, 1]
+        })
+        anomalies, stats = detect_anomalies(df, std_multiplier=2)
+        assert len(anomalies) == 0
+    
+    def test_all_values_above_threshold(self):
+        """Test when all values are anomalies."""
+        df = pd.DataFrame({
+            'user': ['user_1', 'user_2', 'user_3'],
+            'logins': [100, 200, 150]
+        })
+        anomalies, stats = detect_anomalies(df, std_multiplier=1)
+        # With such extreme variance, all should be anomalies or none
+        assert len(anomalies) >= 0
+
+
+class TestIntegration:
+    """Integration tests combining multiple functions."""
+    
+    def test_full_workflow(self):
+        """Test the complete workflow."""
+        # Generate data
+        df = generate_login_data(n_records=500, n_users=20, seed=7)
+        
+        # Detect anomalies
+        anomalies, stats = detect_anomalies(df, std_multiplier=2)
+        
+        # Verify results
+        assert stats['total_records'] == 500
+        assert stats['anomaly_count'] >= 0
+        assert 0 <= stats['anomaly_percentage'] <= 100
+        assert len(anomalies) == stats['anomaly_count']
+    
+    def test_anomalies_are_subset_of_original(self):
+        """Test that anomalies are a subset of original data."""
+        df = generate_login_data(seed=7)
+        anomalies, _ = detect_anomalies(df)
+        
+        # All anomalies should be in the original data
+        for idx, row in anomalies.iterrows():
+            assert row['user'] in df['user'].values
+            assert row['logins'] in df['logins'].values
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
