@@ -52,7 +52,7 @@ Repository = "https://github.com/yourusername/login-anomaly-detection"
 anomaly-detection = "anomaly_detection:main"
 
 [tool.setuptools]
-packages = ["login_anomaly_detection"]
+py-modules = ["anomaly_detection"]
 
 [tool.black]
 line-length = 88
